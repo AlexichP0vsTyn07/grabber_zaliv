@@ -401,15 +401,19 @@ async def my_event_handler(event):
 
     destination_channel_id = channel_mapping.get(event.chat_id)
 
+
+
+    ''''Загрузка текста из файл text_end и добавление его в конец
     # Загрузка текста из файла text_end.pickle и добавление его в конец updated_text
     try:
-        filename = f'{destination_channel_id}_text_end.pickle'
+        filename = f'{destination_channel_id}_text_end.pickle 
         if os.path.getsize(filename) > 0:
             with open(filename, 'rb') as f:
                 text_end = pickle.load(f)
             updated_text += "\n\n" + text_end  # Добавляем текст из файла в конец обновленного текста
     except Exception as e:
-        logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}")
+        logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}") 
+    '''
 
     if moderation_active:
         try:
@@ -1277,45 +1281,31 @@ async def process_callback_remove_channel_confirm(callback_query: types.Callback
 async def process_callback_list_channels(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     await list_channels(callback_query.message)
-
 class DestinationChannelAdding(StatesGroup):
-    waiting_for_destination_channel_id = State()
+    waiting_for_forwarded_message_from_destination = State()
 
 @dp.callback_query_handler(lambda c: c.data == 'add_destination_channel')
 async def process_callback_add_destination_channel(callback_query: types.CallbackQuery):
-    await DestinationChannelAdding.waiting_for_destination_channel_id.set()
+    await DestinationChannelAdding.waiting_for_forwarded_message_from_destination.set()
     await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id, 'Введите ID канала-получателя или его username, который вы хотите добавить:')
+    await bot.send_message(callback_query.from_user.id, 'Перешлите любое сообщение из канала-получателя, который вы хотите добавить:')
 
-@dp.message_handler(state=DestinationChannelAdding.waiting_for_destination_channel_id)
+@dp.message_handler(content_types=['text', 'photo', 'video'], state=DestinationChannelAdding.waiting_for_forwarded_message_from_destination)
 async def add_destination_channel(message: types.Message, state: FSMContext):
-    try:
-        channel_input = message.text.strip()
-        channel_id = None
-        chat = None
+    if not message.forward_from_chat:
+        await message.reply("Пожалуйста, перешлите сообщение из канала-получателя.")
+        return
 
-        # Проверяем, начинается ли введенное значение с "@" (username)
-        if channel_input.startswith("@"):
-            username = channel_input[1:]  # Убираем символ "@" в начале
-            chat = await client.get_entity(username)
-        # Проверяем, начинается ли введенное значение с "-" (ID)
-        elif channel_input.startswith("-"):
-            channel_id = int(channel_input)
-            chat = await client.get_entity(channel_id)
+    channel_id = message.forward_from_chat.id
+    chat_title = message.forward_from_chat.title
 
-        if chat:
-            destination_channels[channel_id or chat.id] = chat.title
-            await message.reply(f"Канал-получатель {chat.title} (ID: {chat.id}) добавлен")
-            save_channels()
-            logger.info(f"Канал-получатель {chat.title} добавлен")
-        else:
-            await message.reply("Канал-получатель не найден. Пожалуйста, укажите корректный ID канала-получателя или его username (начинается с '@').")
-            logger.error("Ошибка при добавлении канала-получателя")
-    except Exception as e:
-        await message.reply("Произошла ошибка при добавлении канала-получателя.")
-        logger.error(f"Ошибка при добавлении канала-получателя: {str(e)}")
-    finally:
-        await state.finish()
+    # Добавляем канал-получатель в вашу структуру данных
+    destination_channels[channel_id] = chat_title  # Предполагаем, что у вас есть такая структура
+    await message.reply(f"Канал-получатель {chat_title} (ID: {channel_id}) добавлен")
+    save_channels()  # Замените на ваш метод сохранения информации о каналах
+    logger.info(f"Канал-получатель {chat_title} добавлен")
+
+    await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data == 'remove_destination_channel')
 async def process_callback_remove_destination_channel(callback_query: types.CallbackQuery):
@@ -1497,10 +1487,6 @@ def load_channels_from_pickle(file_name):
 def save_channel_mappinggg(mapping):
     with open('channel_mapping.pickle', 'wb') as f:
         pickle.dump(mapping, f)
-
-
-
-
 
 
 channel_mappinggg = load_channels_from_pickle("channel_mapping.pickle")
