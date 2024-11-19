@@ -56,13 +56,19 @@ except FileNotFoundError:
     channel_mapping = {}
 
 
+
 def save_channels():
-    with open('channels.pickle', 'wb') as f:
-        pickle.dump(channels, f)
-    with open('destination_channels.pickle', 'wb') as f:
-        pickle.dump(destination_channels, f)
-    with open('channel_mapping.pickle', 'wb') as f:
-        pickle.dump(channel_mapping, f)
+    """Сохраняем соответствия каналов в файл."""
+    try:
+        with open('channel_mapping.pickle', 'wb') as f:
+            pickle.dump(channel_mapping, f)
+    except Exception as e:
+        print(f"Ошибка сохранения channel_mapping: {e}")
+
+with open('channel_mapping.pickle', 'rb') as f:
+    channel_mapping = pickle.load(f)
+print(type(channel_mapping), channel_mapping)
+
 
 
 def replace_link(text, new_link):
@@ -428,24 +434,26 @@ async def my_event_handler(event):
         except Exception as e:
             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
         return
+    # Получаем destination_channel_ids для текущего source_channel_id
+    destination_channel_ids = channel_mapping.get(event.chat_id, [])   #вытаскивает элемент из списка
 
-    # Получаем destination_channel_id для текущего source_channel_id
-    if destination_channel_id: channel_mapping.get(event.chat_id)
-
-    if destination_channel_id:  # Проверяем, есть ли получатель для источника
+    if destination_channel_ids:  # Проверяем, есть ли получатели для источника
         try:
-            if event.message.media:
-                if isinstance(event.message.media, MessageMediaWebPage):
-                    webpage_url = event.message.media.webpage.url
-                    updated_text_with_url = f"{updated_text}"
-                    await client.send_message(destination_channel_id, updated_text_with_url)
+            for destination_channel_id in destination_channel_ids:  # Итерация по всем получателям
+                if event.message.media:
+                    if isinstance(event.message.media, MessageMediaWebPage):
+                        webpage_url = event.message.media.webpage.url
+                        updated_text_with_url = f"{updated_text}"
+                        await client.send_message(destination_channel_id, updated_text_with_url)
+                    else:
+                        await client.send_file(destination_channel_id, event.message.media, caption=updated_text)
                 else:
-                    await client.send_file(destination_channel_id, event.message.media, caption=updated_text)
-            else:
-                await client.send_message(destination_channel_id, updated_text)
-            logger.info(f"Сообщение переслано: из канала {event.chat_id} в канал {destination_channel_id}")
+                    await client.send_message(destination_channel_id, updated_text)
+                logger.info(f"Сообщение переслано: из канала {event.chat_id} в канал {destination_channel_id}")
         except Exception as e:
             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
+    else:
+        logger.warning(f"Нет получателей для канала {event.chat_id}")
 
 
 
@@ -1330,11 +1338,14 @@ async def process_callback_list_destination_channels(callback_query: types.Callb
 
 
 
-@dp.callback_query_handler(lambda c: c.data == 'set_channel_mapping')
-async def process_callback_set_channel_mapping(callback_query: types.CallbackQuery):
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id,
-                           'Пожалуйста, введите ID канала-источника и ID канала-получателя через пробел после команды /set_channel_mapping.')
+# @dp.callback_query_handler(lambda c: c.data == 'set_channel_mapping')
+# async def process_callback_set_channel_mapping(callback_query: types.CallbackQuery):
+#     await bot.answer_callback_query(callback_query.id)
+#     await bot.send_message(callback_query.from_user.id,
+#                            'Пожалуйста, введите ID канала-источника и ID канала-получателя через пробел после команды /set_channel_mapping.')
+
+
+
 
 
 
@@ -1470,55 +1481,44 @@ async def set_channel_mapping(message: types.Message):
         await message.reply(
             "Пожалуйста, укажите ID канала-источника и ID канала-получателя через пробел: /set_channel_mapping -1001234567890 -1000987654321")
         return
-
+    print(args,'<<<args')
     try:
-        source_channel_id = list(args[0])
-        destination_channel_id = list(args[1])
+        source_channel_id = int(args[0])
+        destination_channel_id = int(args[1])
+        print(destination_channel_id)
 
-        if source_channel_id not in channel_mapping:
-            channel_mapping[source_channel_id] = []  # Initialize to an empty list
-        channel_mapping[source_channel_id].append(destination_channel_id)
-
-        if source_channel_id not in channels:
+        if source_channel_id not in channels.keys():
             await message.reply(f"Канал-источник {source_channel_id} не найден в списке источников")
             return
 
-        if destination_channel_id not in destination_channels:
+        if destination_channel_id not in destination_channels.keys():
             await message.reply(f"Канал-получатель {destination_channel_id} не найден в списке получателей")
             return
 
+        # Инициализация списка, если источник еще не существует в channel_mapping
 
-
-        # Получение объектов каналов и их названий
-        source_channel = await client.get_entity(source_channel_id)
-        destination_channel = await client.get_entity(destination_channel_id)
-
-        # Проверка, существует ли уже соответствие для данного источника
-        if source_channel_id in channel_mapping:
-            # Если получатель уже есть в списке, уведомляем об этом
-            if destination_channel_id in channel_mapping[source_channel_id]:
-                await message.reply(
-                    f"Канал-получатель {destination_channel_id} уже подключен к каналу-источнику {source_channel_id}.")
-                return
-            else:
-                # Добавляем новый получатель в список
-                channel_mapping[source_channel_id].append(destination_channel_id)
+        #channel_mapping[source_channel_id] = []  # Убедитесь, что это список
+        print(channel_mapping[source_channel_id],'<<<channel_mapping[source_channel_id]')
+        print(destination_channel_id,'<<<destination_channel_id')
+        # Проверка, существует ли уже соответствие
+        if destination_channel_id in channel_mapping[source_channel_id]:
+            await message.reply(f"Канал {destination_channel_id} уже подключен к источнику {source_channel_id}")
+            return
+        # Добавляем нового получателя
         else:
-            # Создаем новый список получателей для нового источника
-            channel_mapping[source_channel_id] = [destination_channel_id]
+            print(destination_channel_id, '<<<destination_channel_id')
+            channel_mapping[source_channel_id].append(destination_channel_id)
 
-        await message.reply(
-            f"Канал {source_channel.title} ({source_channel_id}) теперь будет пересылать контент на каналы: {', '.join(str(dest) for dest in channel_mapping[source_channel_id])}")
-
-        # Сохранение обновленного channel_mapping в файл
+        # Сохраняем обновленное соответствие
         with open('channel_mapping.pickle', 'wb') as f:
             pickle.dump(channel_mapping, f)
 
-    except (ValueError, IndexError):
+        await message.reply(
+            f"Канал {channels[source_channel_id]} теперь будет пересылать контент на: {', '.join(str(destination_channels[dest]) for dest in channel_mapping[source_channel_id])}")
+
+    except ValueError:
         await message.reply(
             "Пожалуйста, укажите корректные ID каналов: /set_channel_mapping -1001234567890 -1000987654321")
-    except Exception as e:
-        await message.reply(f"Произошла ошибка: {e}")
 
 #
 # @dp.message_handler(commands=['set_channel_mapping'])
