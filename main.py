@@ -62,12 +62,19 @@ def save_channels():
     try:
         with open('channel_mapping.pickle', 'wb') as f:
             pickle.dump(channel_mapping, f)
+        with open('channels.pickle', 'wb') as f:
+            pickle.dump(channels, f)
+        with open('destination_channels.pickle', 'wb') as f:
+            pickle.dump(destination_channels, f)
     except Exception as e:
         print(f"Ошибка сохранения channel_mapping: {e}")
 
-with open('channel_mapping.pickle', 'rb') as f:
-    channel_mapping = pickle.load(f)
-print(type(channel_mapping), channel_mapping)
+
+
+
+# with open('channel_mapping.pickle', 'rb') as f:
+#     channel_mapping = pickle.load(f)
+# print(type(channel_mapping), channel_mapping)
 
 
 
@@ -1337,18 +1344,6 @@ async def process_callback_list_destination_channels(callback_query: types.Callb
     await list_destination_channels(callback_query.message)
 
 
-
-# @dp.callback_query_handler(lambda c: c.data == 'set_channel_mapping')
-# async def process_callback_set_channel_mapping(callback_query: types.CallbackQuery):
-#     await bot.answer_callback_query(callback_query.id)
-#     await bot.send_message(callback_query.from_user.id,
-#                            'Пожалуйста, введите ID канала-источника и ID канала-получателя через пробел после команды /set_channel_mapping.')
-
-
-
-
-
-
 @dp.callback_query_handler(lambda c: c.data == 'remove_mapping')
 async def process_callback_remove_mapping(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -1386,20 +1381,20 @@ async def help(message: types.Message):
     )
 
     await message.reply(help_message)
-
-@dp.message_handler(commands=['add_channel'])
-async def add_channel(message: types.Message):
-    if message.from_user.id != my_id and message.from_user.id != bot_id:
-        return  
-
-    try:
-        channel_id = int(message.get_args())
-        chat = await client.get_entity(channel_id)
-        channels[channel_id] = chat.title
-        await message.reply(f"Канал {chat.title} добавлен")
-        save_channels()
-    except (ValueError, IndexError):
-        await message.reply("Пожалуйста, укажите корректный ID канала: /add_channel -1001234567890")
+#
+# @dp.message_handler(commands=['add_channel'])
+# async def add_channel(message: types.Message):
+#     if message.from_user.id != my_id and message.from_user.id != bot_id:
+#         return
+#
+#     try:
+#         channel_id = int(message.get_args())
+#         chat = await client.get_entity(channel_id)
+#         channels[channel_id] = chat.title
+#         await message.reply(f"Канал {chat.title} добавлен")
+#         save_channels()
+#     except (ValueError, IndexError):
+#         await message.reply("Пожалуйста, укажите корректный ID канала: /add_channel -1001234567890")
 
 @dp.message_handler(commands=['remove_channel'])
 async def remove_channel(message: types.Message):
@@ -1469,98 +1464,184 @@ async def list_destination_channels(message: types.Message):
     else:
         await message.reply("Список каналов-получателей пуст")
 
+# @dp.callback_query_handler(lambda c: c.data == 'set_channel_mapping')
+# async def process_callback_set_channel_mapping(callback_query: types.CallbackQuery):
+#     await bot.answer_callback_query(callback_query.id)
+#     await bot.send_message(callback_query.from_user.id,
+#                            'Пожалуйста, введите ID канала-источника и ID канала-получателя через пробел после команды /set_channel_mapping.')
 
-@dp.message_handler(commands=['set_channel_mapping'])
-async def set_channel_mapping(message: types.Message):
-    global channel_mapping
-    if message.from_user.id != my_id:
-        return  # Игнорировать команду, если ID пользователя не совпадает с my_id
 
-    args = message.get_args().split()
-    if len(args) != 2:
-        await message.reply(
-            "Пожалуйста, укажите ID канала-источника и ID канала-получателя через пробел: /set_channel_mapping -1001234567890 -1000987654321")
-        return
-    print(args,'<<<args')
+
+
+@dp.callback_query_handler(lambda c: c.data == 'list_destination_channels')
+async def process_callback_list_destination_channels(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await list_destination_channels(callback_query.message)
+
+
+class ChannelMapping(StatesGroup):
+    choosing_source = State()
+    choosing_destination = State()
+
+# Глобальные переменные
+selected_source_channel = None
+
+# Функции для работы с файлами
+def load_channels_from_pickle(file_name):
     try:
-        source_channel_id = int(args[0])
-        destination_channel_id = int(args[1])
-        print(destination_channel_id)
+        with open(file_name, 'rb') as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        return {}
 
-        if source_channel_id not in channels.keys():
-            await message.reply(f"Канал-источник {source_channel_id} не найден в списке источников")
-            return
+def save_channel_mappinggg(mapping):
+    with open('channel_mapping.pickle', 'wb') as f:
+        pickle.dump(mapping, f)
 
-        if destination_channel_id not in destination_channels.keys():
-            await message.reply(f"Канал-получатель {destination_channel_id} не найден в списке получателей")
-            return
 
-        # Инициализация списка, если источник еще не существует в channel_mapping
 
-        #channel_mapping[source_channel_id] = []  # Убедитесь, что это список
-        print(channel_mapping[source_channel_id],'<<<channel_mapping[source_channel_id]')
-        print(destination_channel_id,'<<<destination_channel_id')
-        # Проверка, существует ли уже соответствие
-        if destination_channel_id in channel_mapping[source_channel_id]:
-            await message.reply(f"Канал {destination_channel_id} уже подключен к источнику {source_channel_id}")
-            return
-        # Добавляем нового получателя
-        else:
-            print(destination_channel_id, '<<<destination_channel_id')
-            channel_mapping[source_channel_id].append(destination_channel_id)
 
-        # Сохраняем обновленное соответствие
-        with open('channel_mapping.pickle', 'wb') as f:
-            pickle.dump(channel_mapping, f)
 
-        await message.reply(
-            f"Канал {channels[source_channel_id]} теперь будет пересылать контент на: {', '.join(str(destination_channels[dest]) for dest in channel_mapping[source_channel_id])}")
 
-    except ValueError:
-        await message.reply(
-            "Пожалуйста, укажите корректные ID каналов: /set_channel_mapping -1001234567890 -1000987654321")
+channel_mappinggg = load_channels_from_pickle("channel_mapping.pickle")
+channelsss = load_channels_from_pickle("channels.pickle")
+destination_channelsss = load_channels_from_pickle("destination_channels.pickle")
 
-#
-# @dp.message_handler(commands=['set_channel_mapping'])
-# async def set_channel_mapping(message: types.Message):
-#     global channel_mapping
-#
-#     if message.from_user.id != my_id:
-#         return  # Игнорировать команду, если ID пользователя не совпадает с my_id
-#
-#     args = message.get_args().split()
-#     if len(args) != 2:
-#         await message.reply(
-#             "Пожалуйста, укажите ID канала-источника и ID канала-получателя через пробел: /set_channel_mapping -1001234567890 -1000987654321")
-#         return
-#
-#     try:
-#         source_channel_id = int(args[0])
-#         destination_channel_id = int(args[1])
-#
-#         if source_channel_id not in channels:
-#             await message.reply(f"Канал-источник {source_channel_id} не найден в списке источников")
-#             return
-#
-#         if destination_channel_id not in destination_channels:
-#             await message.reply(f"Канал-получатель {destination_channel_id} не найден в списке получателей")
-#             return
-#
-#         # Инициализация списка, если источник еще не существует в channel_mapping
-#         if source_channel_id not in channel_mapping:
-#             channel_mapping[source_channel_id] = []  # Убедитесь, что это список
-#
-#         # Проверка, существует ли уже соответствие
-#         if destination_channel_id not in channel_mapping[source_channel_id]:
-#             channel_mapping[source_channel_id].append(destination_channel_id)
-#             await message.reply(f"Канал {source_channel_id} теперь будет пересылать контент на канал {destination_channel_id}")
-#         else:
-#             await message.reply(f"Канал {destination_channel_id} уже добавлен для источника {source_channel_id}")
-#
-#         save_channels()  # Сохраните изменения в файле
-#     except (ValueError, IndexError):
-#         await message.reply(
-#             "Пожалуйста, укажите корректные ID каналов: /set_channel_mapping -1001234567890 -1000987654321")
+# Обработчик для кнопки "Назад" в меню выбора канала-источника
+@dp.callback_query_handler(lambda c: c.data == 'back_to_autoposter_menu', state=ChannelMapping.choosing_source)
+async def back_to_autoposter_menu_from_source(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+    await state.finish()  # Завершение состояния
+    await bot.edit_message_text(
+        chat_id=callback_query.from_user.id,
+        message_id=callback_query.message.message_id,
+        text="Вы вернулись в меню автопостинга.",
+        reply_markup=create_autoposter_menu_keyboard(),
+        parse_mode='HTML'
+    )
+
+# Обработчик для кнопки "Назад" в меню выбора канала-получателя
+@dp.callback_query_handler(lambda c: c.data == 'back_to_autoposter_menu', state=ChannelMapping.choosing_destination)
+async def back_to_autoposter_menu_from_destination(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+    await state.finish()  # Завершение состояния
+    await bot.edit_message_text(
+        chat_id=callback_query.from_user.id,
+        message_id=callback_query.message.message_id,
+        text="Вы вернулись в меню автопостинга.",
+        reply_markup=create_autoposter_menu_keyboard(),
+        parse_mode='HTML'
+    )
+
+# Обработчик для кнопки "Назад" в меню установки маппинга
+@dp.callback_query_handler(lambda c: c.data == 'back_to_autoposter_menu', state=ChannelMapping.choosing_source)
+async def back_to_autoposter_menu_from_mapping(callback_query: types.CallbackQuery, state: FSMContext):
+    await bot.answer_callback_query(callback_query.id)
+    await state.finish()  # Завершение состояния
+    await bot.edit_message_text(
+        chat_id=callback_query.from_user.id,
+        message_id=callback_query.message.message_id,
+        text="Вы вернулись в меню автопостинга.",
+        reply_markup=create_autoposter_menu_keyboard(),
+        parse_mode='HTML'
+    )
+
+# Обновление функции show_channelsss для добавления кнопки "Назад"
+async def show_channelsss(callback_query, channelsss, text, state):
+    markup = InlineKeyboardMarkup()
+    for channel_id, channel_name in channelsss.items():
+        markup.add(InlineKeyboardButton(text=f"{channel_name} ({channel_id})", callback_data=str(channel_id)))
+    markup.add(InlineKeyboardButton("⬅️Назад", callback_data='back_to_autoposter_menu'))  # Кнопка "Назад"
+    await bot.edit_message_text(
+        chat_id=callback_query.from_user.id,
+        message_id=callback_query.message.message_id,
+        text=text,
+        reply_markup=markup
+    )
+    await state.set()
+# Определение состояний для выбора каналов
+class ChannelMapping(StatesGroup):
+    choosing_source = State()
+    choosing_destination = State()
+
+# Обработчик начала установки маппинга
+@dp.callback_query_handler(lambda c: c.data == 'set_channel_mapping')
+async def process_callback_set_channel_mapping(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+
+    # Загрузка данных каналов-источников
+    try:
+        with open('channels.pickle', 'rb') as f:
+            channelsss = pickle.load(f)
+    except FileNotFoundError:
+        channelsss = {}
+
+    await show_channelsss(callback_query, channelsss, 'Выберите канал-источник:', ChannelMapping.choosing_source)
+
+# Выбор канала-источника и канала-получателя
+@dp.callback_query_handler(state=ChannelMapping.choosing_source)
+async def choose_source_channel(callback_query: types.CallbackQuery, state: FSMContext):
+    global selected_source_channel
+    # if callback_query.data != "⬅️Назад":
+    selected_source_channel = int(callback_query.data)
+
+    # Загрузка данных каналов-получателей
+    try:
+        with open('destination_channels.pickle', 'rb') as f:
+            destination_channelsss = pickle.load(f)
+    except FileNotFoundError:
+        destination_channelsss = {}
+
+    await show_channelsss(callback_query, destination_channelsss, 'Выберите канал-получатель:', ChannelMapping.choosing_destination)
+# Обработка выбора канала-получателя и установка маппинга
+@dp.callback_query_handler(state=ChannelMapping.choosing_destination)
+async def choose_destination_channel(callback_query: types.CallbackQuery, state: FSMContext):
+    destination_channel_id = int(callback_query.data)
+
+    # Проверка, существует ли источник и получатель
+    if selected_source_channel not in channels.keys():
+        await callback_query.answer(f"Канал-источник {selected_source_channel} не найден в списке источников")
+        return
+
+    if destination_channel_id not in destination_channels.keys():
+        await callback_query.answer(f"Канал-получатель {destination_channel_id} не найден в списке получателей")
+        return
+
+    # Инициализация списка, если источник еще не существует в channel_mapping
+    if selected_source_channel not in channel_mapping:
+        channel_mapping[selected_source_channel] = []
+
+    # Проверка, существует ли уже соответствие
+    if destination_channel_id in channel_mapping[selected_source_channel]:
+        await callback_query.answer(f"Канал {destination_channel_id} уже подключен к источнику {selected_source_channel}")
+        return
+
+    # Добавляем нового получателя
+    channel_mapping[selected_source_channel].append(destination_channel_id)
+
+    # Сохраняем обновленное соответствие
+    with open('channel_mapping.pickle', 'wb') as f:
+        pickle.dump(channel_mapping, f)
+
+    await callback_query.answer(
+        f"Канал {channels[selected_source_channel]} теперь будет пересылать контент на: {', '.join(str(destination_channels[dest]) for dest in channel_mapping[selected_source_channel])}")
+
+    # Обновляем меню выбора получателей
+    await show_channelsss(callback_query, destination_channels, 'Выберите канал-получатель:', ChannelMapping.choosing_destination)
+
+# Обновление функции show_channelsss для добавления кнопки "Назад"
+async def show_channelsss(callback_query, channelsss, text, state):
+    markup = InlineKeyboardMarkup()
+    for channel_id, channel_name in channelsss.items():
+        markup.add(InlineKeyboardButton(text=f"{channel_name} ({channel_id})", callback_data=str(channel_id)))
+    markup.add(InlineKeyboardButton("⬅️Назад", callback_data='back_to_autoposter_menu'))  # Кнопка "Назад"
+    await bot.edit_message_text(
+        chat_id=callback_query.from_user.id,
+        message_id=callback_query.message.message_id,
+        text=text,
+        reply_markup=markup
+    )
+    await state.set()
 
 
 @dp.message_handler(commands=['last_messages'])
@@ -1704,9 +1785,9 @@ if __name__ == "__main__":
                     channel_mapping = pickle.load(f)
             except FileNotFoundError:
                 pass
-
             await client.start()
             await client.connect()
+
 
             # keyboard = create_menu_keyboard()
             # await message.reply(start_message, reply_markup=keyboard)
