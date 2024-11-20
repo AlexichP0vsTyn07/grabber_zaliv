@@ -11,6 +11,7 @@ import pickle
 import re
 import sys
 from telethon import TelegramClient, events
+from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageMediaWebPage, MessageMediaPhoto, MessageMediaDocument
 from config import api_id, api_hash, bot_token, my_id, technical_channel_id, new_link, proxy_url, openai_api_key, new_username, TIMEOUT, SAFE_MODE_LIMIT
 import httpx
@@ -216,133 +217,17 @@ async def get_destination_channel_info(destination_channel_id):
 
 
 
-@client.on(events.Album(chats=channels))
-async def album_event_handler(event):
-    grouped_media = event.messages
-    updated_texts = []
-    media_list = []
+def create_moder_keyboard(sent_message):
 
-    for message in grouped_media:
-        original_text = message.text
-        updated_text = replace_link(replace_at_word(original_text, new_username), new_link)
-        updated_texts.append(updated_text)
-        media_list.append(message.media)
-
-    updated_caption = "\n".join([text for text in updated_texts if text])
-
-    if moderation_active:
-        sent_messages = await client.send_file(technical_channel_id, media_list, caption=updated_caption)
-        last_message_id = sent_messages[-1].id
-
-        # Сохраняем весь список сообщений для дальнейшего использования
-        message_storage[last_message_id] = sent_messages
-
-        # Получаем информацию о канале из файла
-        destination_channel_id = channel_mapping[event.chat_id]
-        destination_channel_title, destination_channel_id = await get_destination_channel_info(destination_channel_id)
-        # Отправка кнопок после сообщения
-        moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
-            InlineKeyboardButton("Отправить", callback_data=f'send_{last_message_id}'),
-            InlineKeyboardButton("Отклонить", callback_data=f'decline_{last_message_id}'),
-            InlineKeyboardButton("Отредактировано", callback_data=f'edited_{last_message_id}')
-        )
-        await bot.send_message(technical_channel_id, f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):", reply_markup=moderation_keyboard)
-        return
-
-    for source_channel_id, destination_channel_id in channel_mapping.items():
-        # Проверяем, что альбом пришел из нужного исходного канала
-        if event.chat_id == source_channel_id:
-            try:
-                await client.send_file(destination_channel_id, media_list, caption=updated_caption)
-                logger.info(f"Альбом переслан: {updated_caption}")
-            except Exception as e:
-                logger.error(f"Ошибка при отправке альбома: {str(e)}")
-
-
-@dp.callback_query_handler(lambda c: c.data.startswith('rewrite_'))
-async def process_rewrite(callback_query: types.CallbackQuery):
-    message_id = int(callback_query.data.split('_')[1])
-
-    if message_id in message_storage:
-        original_message = message_storage[message_id]
-        original_text = original_message.text if original_message.text else ""
-
-        rewritten_text = await rewrite_text_with_chatgpt(original_text, openai_api_key)
-
-        await client.edit_message(technical_channel_id, message_id, rewritten_text)
-        await bot.answer_callback_query(callback_query.id, "Текст переформулирован.")
-
-proxies = {
-    "http://": proxy_url,
-    "https://": proxy_url
-}
-
-async def rewrite_text_with_chatgpt(text, openai_api_key):
-    prompt_text = "Переформулируй этот текст: " + text
-    json_data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": prompt_text}]
-    }
-    headers = {"Authorization": f"Bearer {openai_api_key}"}
-
-    # Установка таймаута для запроса
-    timeout = httpx.Timeout(10.0, connect=90.0)
-
-    async with httpx.AsyncClient(proxies=proxies, timeout=timeout) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            json=json_data,
-            headers=headers
-        )
-
-    if response.status_code == 200:
-        response_data = response.json()
-        rewritten_text = response_data['choices'][0]['message']['content']
-        return rewritten_text
-    else:
-        print(f"Ошибка запроса: {response.status_code} - {response.text}")
-        return None
-
-
-link_replacement_active = False
-is_safe_mode_active = False
-def create_menu_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=2)  # Устанавливаем ширину ряда в 2 для двух колонок
-    # Добавляем кнопки по две в ряд
-    keyboard.row(InlineKeyboardButton("Автопостер\U0001F916", callback_data='autoposter_menu'),
-                 #InlineKeyboardButton("Сообщения\U00002709", callback_data='lasting'))
-                 InlineKeyboardButton("Перезагрузить\U0001F504", callback_data='restart_bot'))
-    keyboard.row(InlineKeyboardButton("Настройки\U00002699", callback_data='additional_settings'),
-                 InlineKeyboardButton("Помощь\U0001F4CB", callback_data='instructions'))
-    #keyboard.row(InlineKeyboardButton("Команды\U0001F6E0", callback_data='comands'))
-
-    moderation_text = "Модерация: выключить" if moderation_active else "Модерация: включить"
-    keyboard.add(InlineKeyboardButton(moderation_text, callback_data='toggle_moderation'))
-    link_replacement_text = "Замена ссылок: выключить" if link_replacement_active else "Замена ссылок: включить"
-    keyboard.add(InlineKeyboardButton(link_replacement_text, callback_data='toggle_link_replacement'))
-
-    toggle_safe_text = "Безопасный режим: выключить" if is_safe_mode_active else "Безопасный режим: включить"
-    keyboard.add(InlineKeyboardButton(toggle_safe_text, callback_data='toggle_safe_mode'))
-
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'))
+    keyboard.add(InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'))
+    keyboard.add(InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'))
+    keyboard.add(InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'))
+    keyboard.add(InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}'))
+    keyboard.add(InlineKeyboardButton("Генерация фото", callback_data=f'image_gen_{sent_message.id}'))
     return keyboard
 
-@dp.callback_query_handler(lambda c: c.data == 'instructions')
-async def process_callback_button1(callback_query: types.CallbackQuery):
-    url = "https://telegra.ph/GraberPro-PREMIUM-instrukciya-11-12"
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id, f"Вот ссылка на инструкцию: {url}")
-
-
-def trim_text_after_deleting_word(text, deleting_words):
-
-    for word in deleting_words:
-        word_pos = text.find(word)
-        if word_pos != -1:
-            trimmed_text = text[:word_pos]
-            logger.info(f"Найдено слово '{word}'. Начальный текст: '{text}' . Обрезанный текст: '{trimmed_text}'")
-            return trimmed_text
-
-    return text
 @client.on(events.NewMessage(chats=list(channel_mapping.keys())))
 async def my_event_handler(event):
     if event.message.grouped_id:
@@ -381,39 +266,43 @@ async def my_event_handler(event):
 
     # Проверка на наличие черных слов
     if blacklist_words and any(word.lower() in original_text.lower() for word in blacklist_words):
-        logging.info("В тексте найдено слово из black_list. Сообщение не будет опубликовано.")
-        return  # Если ключевое слово из black_list найдено, сообщение не публикуется
+        logger.info("В тексте найдено слово из black_list. Сообщение не будет опубликовано.")
+        return
 
     # Проверка на наличие ключевых слов в тексте (whitelist)
     if keywords_list and not any(keyword.lower() in original_text.lower() for keyword in keywords_list):
-        logging.info("В тексте нет слов из white_list. Сообщение не будет опубликовано.")
+        logger.info("В тексте нет слов из white_list. Сообщение не будет опубликовано.")
         return  # Если ключевые слова отсутствуют, сообщение не публикуется
 
-    # Обновление текста с заменами
+    new_link = "https://t.me/poluchatel_channel"
+    new_username = "@poluchatel_channel"
+
+
     if link_replacement_active:
         updated_text = replace_link(replace_at_word(original_text, new_username), new_link)
     else:
         updated_text = replace_at_word(original_text, new_username)
+
+    logger.info(f"Updated text: {updated_text}")
 
     # Удаление слов, если они есть
     if deleting_words:
         updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
 
     destination_channel_id = channel_mapping.get(event.chat_id)
+    if destination_channel_id is None:
+        logger.warning(f"Канал назначения не найден для {event.chat_id}")
+        return
 
-
-
-    ''''Загрузка текста из файл text_end и добавление его в конец
     # Загрузка текста из файла text_end.pickle и добавление его в конец updated_text
     try:
-        filename = f'{destination_channel_id}_text_end.pickle 
+        filename = f'{destination_channel_id}_text_end.pickle'
         if os.path.getsize(filename) > 0:
             with open(filename, 'rb') as f:
                 text_end = pickle.load(f)
             updated_text += "\n\n" + text_end  # Добавляем текст из файла в конец обновленного текста
     except Exception as e:
-        logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}") 
-    '''
+        logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}")
 
     if moderation_active:
         try:
@@ -422,32 +311,51 @@ async def my_event_handler(event):
                     webpage_url = event.message.media.webpage.url
                     updated_text_with_url = f"{updated_text}"
                     sent_message = await client.send_message(technical_channel_id, updated_text_with_url)
+
                 else:
-                    sent_message = await client.send_message(technical_channel_id, updated_text, file=event.message.media)
+                    sent_message = await client.send_message(technical_channel_id, updated_text,
+                                                             file=event.message.media)
+
+                message_storage[sent_message.id] = sent_message
+                moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
+                    InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'),
+                    InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'),
+                    InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'),
+                    InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'),
+                    InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}')
+                )
+                # Получаем информацию о канале из файла
+                destination_channel_id = channel_mapping.get(event.chat_id, None)
+                if destination_channel_id is not None:
+                    destination_channel_title, _ = await get_destination_channel_info(destination_channel_id)
+                    await bot.send_message(technical_channel_id,
+                                           f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):",
+                                           reply_markup=moderation_keyboard)
             else:
+                # Обработка случая, когда нет медиа в сообщении
                 sent_message = await client.send_message(technical_channel_id, updated_text)
-
-            message_storage[sent_message.id] = sent_message
-            moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
-                InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'),
-                InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'),
-                InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'),
-                InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'),
-                InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}'),
-                InlineKeyboardButton("Генерация фото", callback_data=f'image_gen_{sent_message.id}')
-            )
-
-            # Отправка клавиатуры в технический канал
-            destination_channel_title, _ = await get_destination_channel_info(destination_channel_id)
-            await bot.send_message(technical_channel_id,
-                                   f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):",
-                                   reply_markup=moderation_keyboard)
+                message_storage[sent_message.id] = sent_message
+                moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
+                    InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'),
+                    InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'),
+                    InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'),
+                    InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'),
+                    InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}'),
+                    InlineKeyboardButton("Генерация фото", callback_data=f'image_gen_{sent_message.id}')
+                )
+                # Получаем информацию о канале из файла
+                destination_channel_id = channel_mapping.get(event.chat_id, None)
+                if destination_channel_id is not None:
+                    destination_channel_title, _ = await get_destination_channel_info(destination_channel_id)
+                    await bot.send_message(technical_channel_id,
+                                           f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):",
+                                           reply_markup=moderation_keyboard)
         except Exception as e:
             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
         return
-    # Получаем destination_channel_ids для текущего source_channel_id
-    destination_channel_ids = channel_mapping.get(event.chat_id, [])   #вытаскивает элемент из списка
 
+    # Получаем destination_channel_ids для текущего source_channel_id
+    destination_channel_ids = channel_mapping.get(event.chat_id, [])
     if destination_channel_ids:  # Проверяем, есть ли получатели для источника
         try:
             for destination_channel_id in destination_channel_ids:  # Итерация по всем получателям
@@ -466,6 +374,277 @@ async def my_event_handler(event):
     else:
         logger.warning(f"Нет получателей для канала {event.chat_id}")
 
+
+@dp.callback_query_handler(lambda c: c.data.startswith('rewrite_'))
+async def process_rewrite(callback_query: types.CallbackQuery):
+    message_id = int(callback_query.data.split('_')[1])
+
+    if message_id in message_storage:
+        original_message = message_storage[message_id]
+        original_text = original_message.text if original_message.text else ""
+
+        rewritten_text = await rewrite_text_with_chatgpt(original_text, openai_api_key)
+
+        #await client.edit_message(technical_channel_id, message_id, rewritten_text)
+        await bot.answer_callback_query(callback_query.id, "Текст переформулирован.")
+
+proxies = {
+    "http://": proxy_url,
+    "https://": proxy_url
+}
+
+async def rewrite_text_with_chatgpt(text, openai_api_key):
+    prompt_text = "Переформулируй этот текст: " + text
+    json_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": prompt_text}]
+    }
+    headers = {"Authorization": f"Bearer {openai_api_key}"}
+
+    # Установка таймаута для запроса
+    timeout = httpx.Timeout(10.0, connect=90.0)
+
+    async with httpx.AsyncClient(proxies=proxies, timeout=timeout) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            json=json_data,
+            headers=headers
+        )
+
+    if response.status_code == 200:
+        response_data = response.json()
+        rewritten_text = response_data['choices'][0]['message']['content']
+        return rewritten_text
+    else:
+        print(f"Ошибка запроса: {response.status_code} - {response.text}")
+        return None
+
+
+link_replacement_active = False
+is_safe_mode_active = False
+rewrite_button_active = False
+
+async def send_message_with_keyboard(updated_text):
+    # Отправляем сообщение
+    sent_message = await client.send_message(technical_channel_id, updated_text)
+
+    # Создаем клавиатуру с кнопкой "Рерайт текста"
+    keyboard = create_menu_keyboard()
+    keyboard.add(InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'))
+
+    # Обновляем сообщение с клавиатурой
+    await client.edit_message_reply_markup(technical_channel_id, sent_message.id, reply_markup=keyboard)
+
+
+def create_menu_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=2)  # Устанавливаем ширину ряда в 2 для двух колонок
+    keyboard.row(InlineKeyboardButton("Автопостер\U0001F916", callback_data='autoposter_menu'),
+                 InlineKeyboardButton("Перезагрузить\U0001F504", callback_data='restart_bot'))
+    keyboard.row(InlineKeyboardButton("Настройки\U00002699", callback_data='additional_settings'),
+                 InlineKeyboardButton("Помощь\U0001F4CB", callback_data='instructions'))
+
+    moderation_text = "Модерация: выключить" if moderation_active else "Модерация: включить"
+    #keyboard.add(InlineKeyboardButton(moderation_text, callback_data='toggle_moderation'))
+
+    link_replacement_text = "Замена ссылок: выключить" if link_replacement_active else "Замена ссылок: включить"
+    keyboard.add(InlineKeyboardButton(link_replacement_text, callback_data='toggle_link_replacement'))
+
+    toggle_safe_text = "Безопасный режим: выключить" if is_safe_mode_active else "Безопасный режим: включить"
+    keyboard.add(InlineKeyboardButton(toggle_safe_text, callback_data='toggle_safe_mode'))
+
+    rewrite_text_button = "Рерайт текста: выключить" if rewrite_button_active else "Рерайт текста: включить"
+    keyboard.add(InlineKeyboardButton(rewrite_text_button, callback_data='toggle_rewrite'))
+
+
+    return keyboard
+
+
+# Обработчик для нажатия на кнопку "Рерайт текста"
+@dp.callback_query_handler(lambda c: c.data == 'toggle_rewrite')
+async def toggle_rewrite(callback_query: types.CallbackQuery):
+    global rewrite_button_active
+    rewrite_button_active = not rewrite_button_active  # Переключаем состояние
+
+    # Обновляем текст кнопки
+    await bot.answer_callback_query(callback_query.id,
+                                    f"Рерайт текста {'включен' if rewrite_button_active else 'выключен'}.")
+
+    # Обновляем клавиатуру
+    keyboard = create_menu_keyboard()
+    await bot.edit_message_reply_markup(callback_query.from_user.id, callback_query.message.message_id,
+                                        reply_markup=keyboard)
+
+
+# Обработчик для переформулирования текста
+@dp.callback_query_handler(lambda c: c.data.startswith('rewrite_'))
+async def process_rewrite(callback_query: types.CallbackQuery):
+    if not rewrite_button_active:
+        await bot.answer_callback_query(callback_query.id, "Кнопка 'Рерайт текста' выключена.")
+        return
+
+    message_id = int(callback_query.data.split('_')[1])
+
+    if message_id in message_storage:
+        original_message = message_storage[message_id]
+        original_text = original_message.text if original_message.text else ""
+
+        rewritten_text = await rewrite_text_with_chatgpt(original_text, openai_api_key)
+
+        if rewritten_text:
+            await bot.send_message(callback_query.from_user.id, f"Переформулированный текст:\n{rewritten_text}")
+        else:
+            await bot.send_message(callback_query.from_user.id, "Не удалось переформулировать текст.")
+
+
+# Функция для переформулирования текста через ChatGPT
+async def rewrite_text_with_chatgpt(text, openai_api_key):
+    prompt_text = "Переформулируй этот текст: " + text
+    json_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": prompt_text}]
+    }
+    headers = {"Authorization": f"Bearer {openai_api_key}"}
+
+
+@dp.callback_query_handler(lambda c: c.data == 'instructions')
+async def process_callback_button1(callback_query: types.CallbackQuery):
+    url = "https://telegra.ph/GraberPro-PREMIUM-instrukciya-11-12"
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, f"Вот ссылка на инструкцию: {url}")
+
+
+def trim_text_after_deleting_word(text, deleting_words):
+
+    for word in deleting_words:
+        word_pos = text.find(word)
+        if word_pos != -1:
+            trimmed_text = text[:word_pos]
+            logger.info(f"Найдено слово '{word}'. Начальный текст: '{text}' . Обрезанный текст: '{trimmed_text}'")
+            return trimmed_text
+
+    return text
+# @client.on(events.NewMessage(chats=list(channel_mapping.keys())))
+# async def my_event_handler(event):
+#     if event.message.grouped_id:
+#         return
+#
+#     # Загрузка белого списка
+#     try:
+#         with open('white_list.pickle', 'rb') as f:
+#             keywords_list = pickle.load(f)
+#     except (FileNotFoundError, EOFError):
+#         keywords_list = []
+#         logging.warning("Файл 'white_list.pickle' не найден или пуст.")
+#
+#     # Загрузка списка слов для удаления
+#     try:
+#         if os.path.getsize('deleting_text.pickle') > 0:
+#             with open('deleting_text.pickle', 'rb') as f:
+#                 deleting_words = pickle.load(f)
+#         else:
+#             deleting_words = []
+#     except Exception as e:
+#         deleting_words = []
+#
+#     # Загрузка черного списка
+#     try:
+#         if os.path.getsize('blacklist.pickle') > 0:
+#             with open('blacklist.pickle', 'rb') as f:
+#                 blacklist_words = pickle.load(f)
+#         else:
+#             blacklist_words = []
+#     except Exception as e:
+#         blacklist_words = []
+#
+#     original_text = event.message.text
+#     logger.info(f"Получено сообщение: {original_text}")
+#
+#     # Проверка на наличие черных слов
+#     if blacklist_words and any(word.lower() in original_text.lower() for word in blacklist_words):
+#         logging.info("В тексте найдено слово из black_list. Сообщение не будет опубликовано.")
+#         return  # Если ключевое слово из black_list найдено, сообщение не публикуется
+#
+#     # Проверка на наличие ключевых слов в тексте (whitelist)
+#     if keywords_list and not any(keyword.lower() in original_text.lower() for keyword in keywords_list):
+#         logging.info("В тексте нет слов из white_list. Сообщение не будет опубликовано.")
+#         return  # Если ключевые слова отсутствуют, сообщение не публикуется
+#
+#     # Обновление текста с заменами
+#     if link_replacement_active:
+#         updated_text = replace_link(replace_at_word(original_text, new_username), new_link)
+#     else:
+#         updated_text = replace_at_word(original_text, new_username)
+#
+#     # Удаление слов, если они есть
+#     if deleting_words:
+#         updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+#
+#     destination_channel_id = channel_mapping.get(event.chat_id)
+#
+#
+#
+#     # Загрузка текста из файла text_end.pickle и добавление его в конец updated_text
+#     try:
+#         filename = f'{destination_channel_id}_text_end.pickle
+#         if os.path.getsize(filename) > 0:
+#             with open(filename, 'rb') as f:
+#                 text_end = pickle.load(f)
+#             updated_text += "\n\n" + text_end  # Добавляем текст из файла в конец обновленного текста
+#     except Exception as e:
+#         logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}")
+#
+#
+#     if moderation_active:
+#         try:
+#             if event.message.media:
+#                 if isinstance(event.message.media, MessageMediaWebPage):
+#                     webpage_url = event.message.media.webpage.url
+#                     updated_text_with_url = f"{updated_text}"
+#                     sent_message = await client.send_message(technical_channel_id, updated_text_with_url)
+#                 else:
+#                     sent_message = await client.send_message(technical_channel_id, updated_text, file=event.message.media)
+#             else:
+#                 sent_message = await client.send_message(technical_channel_id, updated_text)
+#
+#             message_storage[sent_message.id] = sent_message
+#             moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
+#                 InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'),
+#                 InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'),
+#                 InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'),
+#                 InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'),
+#                 InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}'),
+#                 InlineKeyboardButton("Генерация фото", callback_data=f'image_gen_{sent_message.id}')
+#             )
+#
+#             # Отправка клавиатуры в технический канал
+#             destination_channel_title, _ = await get_destination_channel_info(destination_channel_id)
+#             await bot.send_message(technical_channel_id,
+#                                    f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):",
+#                                    reply_markup=moderation_keyboard)
+#         except Exception as e:
+#             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
+#         return
+#     # Получаем destination_channel_ids для текущего source_channel_id
+#     destination_channel_ids = channel_mapping.get(event.chat_id, [])   #вытаскивает элемент из списка
+#
+#     if destination_channel_ids:  # Проверяем, есть ли получатели для источника
+#         try:
+#             for destination_channel_id in destination_channel_ids:  # Итерация по всем получателям
+#                 if event.message.media:
+#                     if isinstance(event.message.media, MessageMediaWebPage):
+#                         webpage_url = event.message.media.webpage.url
+#                         updated_text_with_url = f"{updated_text}"
+#                         await client.send_message(destination_channel_id, updated_text_with_url)
+#                     else:
+#                         await client.send_file(destination_channel_id, event.message.media, caption=updated_text)
+#                 else:
+#                     await client.send_message(destination_channel_id, updated_text)
+#                 logger.info(f"Сообщение переслано: из канала {event.chat_id} в канал {destination_channel_id}")
+#         except Exception as e:
+#             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
+#     else:
+#         logger.warning(f"Нет получателей для канала {event.chat_id}")
+#
 
 
 def create_autoposter_menu_keyboard():
@@ -657,6 +836,7 @@ async def add_text_end(message: types.Message, state: FSMContext):
         logger.error(f"Ошибка при добавлении текста в конец поста: {str(e)}")
     finally:
         await state.finish()
+
 @dp.callback_query_handler(lambda c: c.data == 'show_text_end')
 async def show_text_end(callback_query: types.CallbackQuery):
     try:
@@ -917,6 +1097,12 @@ async def confirm_remove_blacklist_word(callback_query: types.CallbackQuery):
     except Exception as e:
         await bot.send_message(callback_query.from_user.id, "Произошла ошибка при удалении слова.")
         logger.error(f"Ошибка при удалении слова: {str(e)}")
+
+
+hours = TIMEOUT // 3600
+lim_message = "Достигнут лимит {} сообщений в безопасном режиме. Введена задержка {} часа".format(SAFE_MODE_LIMIT, hours)
+resume_message = "Задержка завершена. Продолжение работы."
+
 
 
 @dp.callback_query_handler(lambda c: c.data == 'show_mapping')
@@ -1721,6 +1907,541 @@ async def send_last_messages(source_channel_id=None, limit=None):
                         # Отправляем текстовое сообщение на целевой канал
                         for dest_id in destination_channel_ids:
                             await client.send_message(dest_id, updated_text)
+
+
+def parse_telegram_link(link):
+    match = re.match(r"https://t\.me/c/(\d+)/(\d+)\?thread=(\d+)", link)
+    if match:
+        channel_id = int('-100' + match.group(1))
+        message_id = int(match.group(2))
+        thread_id = int(match.group(3))
+        return channel_id, message_id, thread_id
+    else:
+        return None, None, None
+
+
+async def com(source_channel_id=None, target_channel_link=None, limit=None, chat_id=None):
+    global number_messages
+    message_counter = 0  # Инициализация счетчика сообщений
+    total_messages = 0  # Будет вычислено после получения сообщений
+
+    logger.info(f"Обработка {limit} сообщений. Безопасный режим {'включен' if is_safe_mode_active else 'отключен'}")
+    try:
+        with open('white_list.pickle', 'rb') as f:
+            keywords_list = pickle.load(f)
+    except (FileNotFoundError, EOFError):
+        keywords_list = []
+
+    target_channel_id, target_message_id, thread_id = parse_telegram_link(target_channel_link)
+    discussion_chat_id = target_channel_id
+
+    if source_channel_id is not None:
+        chat = await client.get_entity(source_channel_id)
+        messages = await client.get_messages(chat, limit=limit)
+    else:
+        messages = []
+        for source_channel_id, destination_channel_id in channel_mapping.items():
+            if destination_channel_id == target_channel_id:
+                chat = await client.get_entity(source_channel_id)
+                channel_messages = await client.get_messages(chat, limit=limit)
+                messages.extend(channel_messages)
+
+    messages = sorted(messages, key=lambda x: x.date)
+    total_messages = len(messages)
+    logger.info(f"Обработано {total_messages} сообщений")
+
+    grouped_messages = {}
+    for message in messages:
+        if message.action is None:
+            if message.grouped_id:
+                if message.grouped_id not in grouped_messages:
+                    grouped_messages[message.grouped_id] = [message]
+                else:
+                    grouped_messages[message.grouped_id].append(message)
+            else:
+                grouped_messages[message.id] = [message]
+
+    # Загрузка списка слов для удаления из файла
+    deleting_words = []
+    try:
+        if os.path.getsize('deleting_text.pickle') > 0:
+            with open('deleting_text.pickle', 'rb') as f:
+                deleting_words = pickle.load(f)
+    except Exception as e:
+        pass
+
+    for target_channel_id in [target_channel_id]:
+        for message_group in grouped_messages.values():
+            # Проверка безопасного режима
+            if is_safe_mode_active and number_messages >= SAFE_MODE_LIMIT:
+                logger.info(lim_message)
+                await dp.bot.send_message(my_id, lim_message)
+                await asyncio.sleep(TIMEOUT)
+                number_messages = 0
+                logger.info(resume_message)
+                await dp.bot.send_message(my_id, resume_message)
+            try:
+                if len(message_group) > 1 and message_group[0].grouped_id:
+                    # Обработка группированных сообщений
+                    captions = []
+                    skip_group = False
+                    for msg in message_group:
+                        if await check_blacklist_words(msg.text if msg.text else ""):
+                            logger.info("Сообщение в группе содержит запрещенные слова, НЕ будет отправлено")
+                            skip_group = True
+                            break
+
+                        updated_text = msg.text if msg.text else ""
+                        if link_replacement_active:
+                            updated_text = replace_link(replace_at_word(message.text, new_username), new_link)
+                        else:
+                            updated_text = replace_at_word(message.text, new_username)
+
+                        if deleting_words and updated_text:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+
+                    if skip_group:
+                        continue
+
+                    media_list = [msg.media for msg in message_group]
+                    media_list.reverse()
+                    caption = "\n".join(filter(None, captions))
+                    if keywords_list and not any(keyword.lower() in caption.lower() for keyword in keywords_list):
+                        logger.info("В тексте нет whitelist слов")
+                        continue  # Пропускаем отправку сообщения
+                    await client.send_file(discussion_chat_id, media_list, caption=caption if caption.strip() else None,
+                                           reply_to=thread_id)
+                    message_counter += len(message_group)
+                    logger.info(f"{message_counter}/{total_messages} сообщений отправлено.")
+                else:
+                    for msg in message_group:
+                        updated_text = msg.text if msg.text else ""
+                        if link_replacement_active and updated_text:
+                            updated_text = replace_link(replace_at_word(updated_text, new_username), new_link)
+                        elif updated_text:
+                            updated_text = replace_at_word(updated_text, new_username)
+
+                        if await check_blacklist_words(updated_text):
+                            logger.info("Сообщение содержит запрещенные слова, НЕ будет отправлено")
+                            continue
+
+                        if deleting_words and updated_text:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+                        if keywords_list and not any(
+                                keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                            logger.info("В тексте нет whitelist слов")
+                            continue  # Пропускаем отправку сообщения
+                        if msg.media:
+                            if isinstance(msg.media, MessageMediaWebPage):
+                                webpage_url = msg.media.webpage.url
+                                updated_text_with_url = f"{updated_text}"
+                                await client.send_message(discussion_chat_id, updated_text_with_url, reply_to=thread_id)
+                            else:
+                                await client.send_file(discussion_chat_id, msg.media,
+                                                       caption=updated_text if updated_text.strip() else None,
+                                                       reply_to=thread_id)
+                        elif updated_text.strip():
+                            await client.send_message(discussion_chat_id, updated_text, reply_to=thread_id)
+                        logger.info(f"{message_counter + 1}/{total_messages} сообщений отправлено.")
+                        message_counter += 1
+
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения в канал {target_channel_id}: {e}")
+
+            if is_safe_mode_active:
+                number_messages += 1
+
+    logger.info(f"Отправка {total_messages} сообщений завершена.")
+
+
+@dp.message_handler(commands=['last'])
+async def send_last_handler(message: types.Message):
+    if message.from_user.id != my_id and message.from_user.id != bot_id:
+        return
+
+    args = message.get_args().split()
+    source_channel_id = None
+    target_channel_id = None
+    limit = 1
+
+    if len(args) == 3:
+        try:
+            source_channel_id = int(args[0])
+            target_channel_id = int(args[1])
+            if args[2].lower() == "all":
+                limit = None
+            else:
+                limit = int(args[2])
+        except ValueError:
+            await message.reply(
+                "Пожалуйста, укажите корректные ID исходного канала, ID целевого канала и количество сообщений: /last -1001234567890 -1009876543210 5 или /last -1001234567890 -1009876543210 all")
+            return
+    else:
+        await message.reply(
+            "Пожалуйста, укажите корректные аргументы команды: /last <ID исходного канала> <ID целевого канала> <количество сообщений>")
+        return
+
+    await send_last(source_channel_id, target_channel_id, limit, message.chat.id)
+    if limit is None:
+        await message.reply("Все сообщения отправлены!")
+    else:
+        await message.reply(f"{limit} последних сообщений отправлены!")
+
+
+async def send_last(source_channel_id=None, target_channel_id=None, limit=None, chat_id=None):
+    global number_messages
+    message_counter = 0  # Инициализация счетчика сообщений
+    total_messages = 0  # Будет вычислено после получения сообщений
+
+    logger.info(f"Обработка {limit} сообщений. Безопасный режим {'включен' if is_safe_mode_active else 'отключен'}")
+    try:
+        with open('white_list.pickle', 'rb') as f:
+            keywords_list = pickle.load(f)
+    except (FileNotFoundError, EOFError):
+        keywords_list = []
+    # Загрузка завершающего текста из файла
+    text_end = ""
+    try:
+        filename = f'{target_channel_id}_text_end.pickle'
+        if os.path.getsize(filename) > 0:
+            with open(filename, 'rb') as f:
+                text_end = pickle.load(f)
+    except Exception as e:
+        pass
+
+    if source_channel_id is not None:
+        chat = await client.get_entity(source_channel_id)
+        messages = await client.get_messages(chat, limit=limit)
+    else:
+        messages = []
+        for source_channel_id, destination_channel_id in channel_mapping.items():
+            if destination_channel_id == target_channel_id:
+                chat = await client.get_entity(source_channel_id)
+                channel_messages = await client.get_messages(chat, limit=limit)
+                messages.extend(channel_messages)
+
+    messages = sorted(messages, key=lambda x: x.date)
+    total_messages = len(messages)
+    logger.info(f"Обработано {total_messages} сообщений")
+
+    grouped_messages = {}
+    for message in messages:
+        if message.action is None:
+            if message.grouped_id:
+                if message.grouped_id not in grouped_messages:
+                    grouped_messages[message.grouped_id] = [message]
+                else:
+                    grouped_messages[message.grouped_id].append(message)
+            else:
+                grouped_messages[message.id] = [message]
+
+    # Загрузка списка слов для удаления из файла
+    deleting_words = []
+    try:
+        if os.path.getsize('deleting_text.pickle') > 0:
+            with open('deleting_text.pickle', 'rb') as f:
+                deleting_words = pickle.load(f)
+    except Exception as e:
+        pass
+
+    for target_channel_id in [target_channel_id]:
+        for message_group in grouped_messages.values():
+            # Проверка безопасного режима
+            if is_safe_mode_active and number_messages >= SAFE_MODE_LIMIT:
+                logger.info(lim_message)
+                await dp.bot.send_message(my_id, lim_message)
+                await asyncio.sleep(TIMEOUT)
+                number_messages = 0
+                logger.info(resume_message)
+                await dp.bot.send_message(my_id, resume_message)
+            try:
+                if len(message_group) > 1 and message_group[0].grouped_id:
+                    # Обработка группированных сообщений
+                    captions = []
+                    skip_group = False
+                    for msg in message_group:
+                        if await check_blacklist_words(msg.text if msg.text else ""):
+                            logger.info("Сообщение в группе содержит запрещенные слова, НЕ будет отправлено")
+                            skip_group = True
+                            break
+
+                        updated_text = msg.text if msg.text else ""
+                        if link_replacement_active and updated_text:
+                            updated_text = replace_link(replace_at_word(updated_text, new_username), new_link)
+                        elif updated_text:
+                            updated_text = replace_at_word(updated_text, new_username)
+
+                        if deleting_words and updated_text:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+
+                        if updated_text:
+                            updated_text += "\n\n" + text_end
+                        captions.append(updated_text)
+
+                    if skip_group:
+                        continue
+
+                    media_list = [msg.media for msg in message_group]
+                    media_list.reverse()
+                    caption = "\n".join(filter(None, captions)) + "\n\n" + text_end
+                    if keywords_list and not any(keyword.lower() in caption.lower() for keyword in keywords_list):
+                        logger.info("В тексте нет whitelist слов")
+                        continue  # Пропускаем отправку сообщения
+                    await client.send_file(target_channel_id, media_list, caption=caption if caption.strip() else None)
+                    message_counter += len(message_group)
+                    logger.info(f"{message_counter}/{total_messages} сообщений отправлено.")
+                else:
+                    for msg in message_group:
+                        updated_text = msg.text if msg.text else ""
+                        if link_replacement_active and updated_text:
+                            updated_text = replace_link(replace_at_word(updated_text, new_username),
+                                                        new_link) + "\n\n" + text_end
+                        elif updated_text:
+                            updated_text = replace_at_word(updated_text, new_username) + "\n\n" + text_end
+
+                        if await check_blacklist_words(updated_text):
+                            logger.info("Сообщение содержит запрещенные слова, НЕ будет отправлено")
+                            continue
+
+                        if deleting_words and updated_text:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+                        if keywords_list and not any(
+                                keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                            logger.info("В тексте нет whitelist слов")
+                            continue  # Пропускаем отправку сообщения
+                        if msg.media:
+                            if isinstance(msg.media, MessageMediaWebPage):
+                                webpage_url = msg.media.webpage.url
+                                updated_text_with_url = f"{updated_text}"
+                                await client.send_message(target_channel_id, updated_text_with_url)
+                            else:
+                                await client.send_file(target_channel_id, msg.media,
+                                                       caption=updated_text if updated_text.strip() else None)
+                        elif updated_text.strip():
+                            await client.send_message(target_channel_id, updated_text)
+                        logger.info(f"{message_counter + 1}/{total_messages} сообщений отправлено.")
+                        message_counter += 1
+
+            except Exception as e:
+                logger.error(f"Ошибка отправки сообщения в канал {target_channel_id}: {e}")
+
+            if is_safe_mode_active:
+                number_messages += 1
+
+    logger.info(f"Отправка {total_messages} сообщений завершена.")
+
+
+async def refresh_and_send_media(client, target_channel_id, message):
+    try:
+        # Попытка перезагрузить сообщение для обновления ссылки на медиа
+        refreshed_message = await client.get_messages(message.chat_id, ids=message.id)
+        media = refreshed_message.media
+        await client.send_file(target_channel_id, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке медиа: {str(e)}")
+
+
+@dp.message_handler(commands=['last_save'])
+async def last_save_command(message: types.Message):
+    try:
+        args = message.get_args().split()
+        if len(args) != 3:
+            await message.reply(
+                "Используйте команду следующим образом: /last_save id-получателя id-отправителя ко-во сообщений")
+            return
+
+        source_channel_id = int(args[0])
+        target_channel_id = int(args[1])
+        limit = args[2] if args[2].lower() != 'all' else None
+
+        await message.reply(f"Обработка {limit} сообщений начата, подождите")
+        await send_last_save(source_channel_id, target_channel_id, limit)
+
+        await message.reply(f"{limit} последних сообщений скачаны и отправлены!")
+    except Exception as e:
+        await message.reply(f"Произошла ошибка при выполнении команды /last_save: {str(e)}")
+
+
+async def check_blacklist_words(message_text):
+    try:
+        if os.path.getsize('blacklist.pickle') > 0:
+            with open('blacklist.pickle', 'rb') as f:
+                blacklist_words = pickle.load(f)
+        else:
+            blacklist_words = []
+    except Exception as e:
+        blacklist_words = []
+
+
+    for word in blacklist_words:
+        if word.lower() in message_text.lower():
+            return True
+    return False
+
+async def send_last_save(source_channel_id, target_channel_id, limit=None):
+    global number_messages
+    processed_group_ids = set()
+    total_messages = 0
+    total_media_files = 0
+    message_count = 0
+
+    try:
+        with open('white_list.pickle', 'rb') as f:
+            keywords_list = pickle.load(f)
+    except (FileNotFoundError, EOFError):
+        keywords_list = []
+
+        # Загрузка завершающего текста из файла
+    text_end = ""
+    try:
+        filename = f'{target_channel_id}_text_end.pickle'
+        if os.path.getsize(filename) > 0:
+            with open(filename, 'rb') as f:
+                text_end = pickle.load(f)
+    except Exception as e:
+        pass
+
+    # Загрузка списка слов для удаления
+    try:
+        if os.path.getsize('deleting_text.pickle') > 0:
+            with open('deleting_text.pickle', 'rb') as f:
+                deleting_words = pickle.load(f)
+        else:
+            deleting_words = []
+    except Exception as e:
+        deleting_words = []
+
+    # Получение сообщений из исходного канала
+    if source_channel_id is not None:
+        chat = await client.get_entity(source_channel_id)
+        messages = await client.get_messages(chat, limit=None if limit is None else int(limit))
+    else:
+        messages = []
+
+    messages = sorted(messages, key=lambda x: x.date)
+    total_messages = len(messages)
+    logger.info(f"Обработка {total_messages} сообщений")
+
+    for message in messages:
+        message_count += 1
+        # Проверка и применение безопасного режима
+        if is_safe_mode_active and number_messages >= SAFE_MODE_LIMIT:
+            logger.info(lim_message)
+            await dp.bot.send_message(my_id, lim_message)  # Уведомление о достижении предела
+            await asyncio.sleep(TIMEOUT)  # Задержка отправки сообщений
+            number_messages = 0  # Сброс счетчика сообщений после задержки
+            logger.info(resume_message)
+            await dp.bot.send_message(my_id, resume_message)
+
+        try:
+            message_text = message.text if message.text else ''
+            updated_text = message_text  # Инициализация обновленного текста сообщения
+
+            if text_end:
+                updated_text += "\n\n" + text_end
+            if keywords_list and not any(keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                logger.info("В тексте нет whitelist слов")
+                continue  # Пропускаем обработку сообщения
+            # Проверка наличия медиа в сообщении и обработка соответственно
+            if message.media:
+
+                # Обработка медиа-альбомов
+                if hasattr(message, 'grouped_id') and message.grouped_id:
+                    if message.grouped_id in processed_group_ids:
+                        continue  # Пропустить уже обработанные медиа-группы
+
+                    album_messages = [msg for msg in messages if msg.grouped_id == message.grouped_id]
+                    album_messages.sort(key=lambda x: x.id)
+                    skip_album = False
+                    captions = []
+                    for album_message in album_messages:
+                        album_text = album_message.text if album_message.text else ''
+                        if await check_blacklist_words(album_text):
+                            logger.info(f"Сообщение в группе содержит запрещенные слова и не будет отправлено")
+                            skip_album = True
+                            break
+                        if link_replacement_active:
+                            updated_text = replace_link(replace_at_word(album_text, new_username), new_link)
+                        else:
+                            updated_text = replace_at_word(album_text, new_username)
+                        if deleting_words:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+                        captions.append(updated_text)
+
+                    if skip_album:
+                        continue
+
+                    media_files = [await client.download_media(album_message.media) for album_message in album_messages]
+                    total_media_files += len(album_messages)
+                    processed_group_ids.add(message.grouped_id)
+                    updated_text = ' '.join(captions)
+                    updated_text += "\n\n" + text_end
+                    if keywords_list and not any(keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                        logger.info("В тексте нет whitelist слов")
+                        continue  # Пропускаем отправку сообщения
+                    await client.send_file(target_channel_id, media_files,
+                                           caption=updated_text if updated_text.strip() else None)
+                else:
+                    # Обработка отдельных медиа-файлов
+                    media_file = await client.download_media(message.media)
+                    total_media_files += 1
+
+                    if message_text:
+                        if link_replacement_active:
+                            updated_text = replace_link(replace_at_word(message_text, new_username), new_link)
+                            updated_text += "\n\n" + text_end
+                        else:
+                            updated_text = replace_at_word(message_text, new_username)
+                            updated_text += "\n\n" + text_end
+                        if await check_blacklist_words(updated_text):
+                            logger.info(f"Сообщение содержит запрещенные слова и не будет отправлено")
+                            continue
+
+                        if deleting_words:
+                            updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+                    else:
+                        updated_text = ''
+                    if keywords_list and not any(keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                        logger.info("В тексте нет whitelist слов")
+                        continue  # Пропускаем отправку сообщения
+                    await client.send_file(target_channel_id, media_file,
+                                           caption=updated_text if updated_text.strip() else None)
+            else:
+                # Обработка текстовых сообщений
+                if link_replacement_active:
+                    updated_text = replace_link(replace_at_word(message_text, new_username), new_link)
+                    updated_text += "\n\n" + text_end
+                else:
+                    updated_text = replace_at_word(message_text, new_username)
+                    updated_text += "\n\n" + text_end
+                if await check_blacklist_words(updated_text):
+                    logger.info(f"Сообщение содержит запрещенные слова и не будет отправлено")
+                    continue
+
+                if deleting_words:
+                    updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
+
+                if updated_text:
+                    if keywords_list and not any(keyword.lower() in updated_text.lower() for keyword in keywords_list):
+                        logger.info("В тексте нет whitelist слов")
+                        continue  # Пропускаем отправку сообщения
+                    await client.send_message(target_channel_id, updated_text)
+
+            message_link = f"https://t.me/c/{str(source_channel_id)[4:]}/{message.id}"
+            logger.info(f"{message_count}/{total_messages} сообщений отправлено. Ссылка на сообщение: {message_link}")
+        except FloodWaitError as e:
+            wait_time = e.seconds
+            logger.info(f"Ожидание {wait_time} секунд")
+            await asyncio.sleep(wait_time)
+        except Exception as e:
+            logger.error(f"{message_count}/{total_messages}. Ошибка обработки сообщения: {e}")
+
+        if is_safe_mode_active:
+            number_messages += 1
+
+    logger.info(f"Готово! Обработано сообщений: {total_messages}, загружено медиа-файлов: {total_media_files}")
+
+
 @dp.callback_query_handler(lambda c: c.data == 'restart_bot')
 async def process_restart_bot(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
@@ -1743,22 +2464,22 @@ async def restart_bot(message: types.Message):
 
     except Exception as e:
         await message.reply(f"Произошла ошибка при перезагрузке: {e}")
-
+# Функция для обработки старта
+async def handle_start(user_id):
+    start_message = "Привет! Я бот для работы с каналами в Telegram."
+    keyboard = create_menu_keyboard()
+    await bot.send_message(user_id, start_message, reply_markup=keyboard)
 
 # Обработчик команды /start
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
     if message.from_user.id != my_id and message.from_user.id != bot_id:
         return
-
-    start_message = "Привет! Я бот для работы с каналами в Telegram."
-    keyboard = create_menu_keyboard()
-    await message.reply(start_message, reply_markup=keyboard)
+    await handle_start(message.from_user.id)
 
 if __name__ == "__main__":
     async def main():
         try:
-            # Объявление переменной channel_mapping перед использованием
             global channel_mapping
             channel_mapping = {}
 
@@ -1771,12 +2492,12 @@ if __name__ == "__main__":
                     channel_mapping = pickle.load(f)
             except FileNotFoundError:
                 pass
+
             await client.start()
             await client.connect()
 
-
-            # keyboard = create_menu_keyboard()
-            # await message.reply(start_message, reply_markup=keyboard)
+            # Вызов функции handle_start для автоматического старта
+            await handle_start(my_id)
 
             dp.register_message_handler(start, commands=['start'], commands_prefix='/')
             dp.register_message_handler(help, commands=['help'], commands_prefix='/')
@@ -1784,73 +2505,10 @@ if __name__ == "__main__":
             await dp.start_polling()
 
         except Exception as e:
-            # Отправка уведомления об ошибке
             await send_notification(f"Произошла ошибка: {str(e)}")
 
         finally:
-            # Отправка уведомления об остановке бота
             await send_notification("Бот остановлен")
-
             await client.disconnect()
 
     asyncio.run(main())
-
-print(channel_mapping)  # Для отладки
-
-# from aiogram import types
-# from aiogram.types import Message
-# from datetime import datetime
-#
-# # Проверьте, что my_id и bot_id определены
-# my_id = 1139743257  # Замените на ваш пользовательский ID
-# bot_id = 7516278979  # Замените на ID вашего бота или получите его программно
-#
-# # Основная функция main
-# async def main():
-#     try:
-#         global channel_mapping
-#         channel_mapping = {}
-#
-#         await send_notification("Бот запущен")
-#
-#         # Обновление соответствий каналов
-#         try:
-#             with open('channel_mapping.pickle', 'rb') as f:
-#                 channel_mapping = pickle.load(f)
-#         except FileNotFoundError:
-#             pass
-#
-#         await client.start()
-#         await client.connect()
-#
-#         # Проверка значений my_id и bot_id
-#         if my_id is None or bot_id is None:
-#             raise ValueError("Не установлены my_id или bot_id.")
-#
-#         # Создание временного объекта сообщения для вызова start
-#         temp_message = Message(
-#             message_id=0,
-#             from_user=types.User(id=1139743257, is_bot=False, first_name="Bot User", type='private'),
-#             chat=types.Chat(id=1139743257, type='private'),
-#             date=int(datetime.now().timestamp()),  # Преобразование даты в таймстамп
-#             text="/start"
-#         )
-#
-#         # Вызов обработчика start
-#         await start(temp_message)
-#
-#         dp.register_message_handler(start, commands=['start'], commands_prefix='/')
-#         dp.register_message_handler(help, commands=['help'], commands_prefix='/')
-#
-#         await dp.start_polling()
-#
-#     except Exception as e:
-#         await send_notification(f"Произошла ошибка: {str(e)}")
-#
-#     finally:
-#         await send_notification("Бот остановлен")
-#         await client.disconnect()
-#
-# # Запуск основного цикла
-# if __name__ == "__main__":
-#     asyncio.run(main())
