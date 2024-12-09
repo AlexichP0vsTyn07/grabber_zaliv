@@ -7,6 +7,7 @@ technical_channel_id = -1002280204717   # ID технического канал
 
 new_link = "https://t.me/poluchatel_channel"
 new_username = "@poluchatel_channel"
+new_link_text = "заменяющий текст на ссылке"
 
 proxy_url = 'http://ip:port'  #заполнять только если планируете рерайтить текст в режиме модерации с помощью Chat GPT
 openai_api_key = "sk-..."  #заполнять только если планируете рерайтить текст в режиме модерации с помощью Chat GPT

@@ -13,7 +13,8 @@ import sys
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageMediaWebPage, MessageMediaPhoto, MessageMediaDocument
-from config import api_id, api_hash, bot_token, my_id, technical_channel_id, new_link, proxy_url, openai_api_key, new_username, TIMEOUT, SAFE_MODE_LIMIT
+from config import api_id, api_hash, bot_token, my_id, technical_channel_id, new_link, proxy_url, openai_api_key, \
+    new_username, TIMEOUT, SAFE_MODE_LIMIT, new_link_text
 import httpx
 
 # Определение состояния для ожидания ввода ID канала
@@ -79,17 +80,20 @@ def save_channels():
 
 
 
-def replace_link(text, new_link):
+def replace_link(text, new_link, new_text):
     # Ищем ссылки с Markdown форматированием [text](http://url)
     markdown_url_pattern = re.compile(r'\[([^\]]+)\]\(http[s]?://[^\)]+\)')
-    # Заменяем URL, сохраняя оригинальный текст ссылки
-    return markdown_url_pattern.sub(r'[\1](' + new_link + ')', text)
+    # Заменяем URL и текст ссылки
+    return markdown_url_pattern.sub(f'[{new_text}]({new_link})', text)
+
+def replace_text_in_links(text, new_word):
+    # Заменяем текст внутри ссылок
+    return re.sub(r'\[([^\]]+)\]\(http[s]?://[^\)]+\)', lambda m: f'[{new_word}]({m.group(0).split("(")[1]}', text)
 
 def replace_at_word(text, new_word):
     if not text:
         return text
     return re.sub(r'@(\w+)', new_word, text)
-
 
 
 async def send_media(message, destination_channel_id, allow_forward=True):
@@ -274,12 +278,12 @@ async def my_event_handler(event):
         logger.info("В тексте нет слов из white_list. Сообщение не будет опубликовано.")
         return  # Если ключевые слова отсутствуют, сообщение не публикуется
 
-    new_link = "https://t.me/poluchatel_channel"
-    new_username = "@poluchatel_channel"
 
+
+    updated_text = replace_at_word(original_text, new_username)
 
     if link_replacement_active:
-        updated_text = replace_link(replace_at_word(original_text, new_username), new_link)
+        updated_text = replace_link(replace_text_in_links(updated_text, new_link_text), new_link, new_link_text)
     else:
         updated_text = replace_at_word(original_text, new_username)
 
@@ -352,6 +356,7 @@ async def my_event_handler(event):
                                            reply_markup=moderation_keyboard)
         except Exception as e:
             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
+
         return
 
     # Получаем destination_channel_ids для текущего source_channel_id
@@ -523,128 +528,6 @@ def trim_text_after_deleting_word(text, deleting_words):
             return trimmed_text
 
     return text
-# @client.on(events.NewMessage(chats=list(channel_mapping.keys())))
-# async def my_event_handler(event):
-#     if event.message.grouped_id:
-#         return
-#
-#     # Загрузка белого списка
-#     try:
-#         with open('white_list.pickle', 'rb') as f:
-#             keywords_list = pickle.load(f)
-#     except (FileNotFoundError, EOFError):
-#         keywords_list = []
-#         logging.warning("Файл 'white_list.pickle' не найден или пуст.")
-#
-#     # Загрузка списка слов для удаления
-#     try:
-#         if os.path.getsize('deleting_text.pickle') > 0:
-#             with open('deleting_text.pickle', 'rb') as f:
-#                 deleting_words = pickle.load(f)
-#         else:
-#             deleting_words = []
-#     except Exception as e:
-#         deleting_words = []
-#
-#     # Загрузка черного списка
-#     try:
-#         if os.path.getsize('blacklist.pickle') > 0:
-#             with open('blacklist.pickle', 'rb') as f:
-#                 blacklist_words = pickle.load(f)
-#         else:
-#             blacklist_words = []
-#     except Exception as e:
-#         blacklist_words = []
-#
-#     original_text = event.message.text
-#     logger.info(f"Получено сообщение: {original_text}")
-#
-#     # Проверка на наличие черных слов
-#     if blacklist_words and any(word.lower() in original_text.lower() for word in blacklist_words):
-#         logging.info("В тексте найдено слово из black_list. Сообщение не будет опубликовано.")
-#         return  # Если ключевое слово из black_list найдено, сообщение не публикуется
-#
-#     # Проверка на наличие ключевых слов в тексте (whitelist)
-#     if keywords_list and not any(keyword.lower() in original_text.lower() for keyword in keywords_list):
-#         logging.info("В тексте нет слов из white_list. Сообщение не будет опубликовано.")
-#         return  # Если ключевые слова отсутствуют, сообщение не публикуется
-#
-#     # Обновление текста с заменами
-#     if link_replacement_active:
-#         updated_text = replace_link(replace_at_word(original_text, new_username), new_link)
-#     else:
-#         updated_text = replace_at_word(original_text, new_username)
-#
-#     # Удаление слов, если они есть
-#     if deleting_words:
-#         updated_text = trim_text_after_deleting_word(updated_text, deleting_words)
-#
-#     destination_channel_id = channel_mapping.get(event.chat_id)
-#
-#
-#
-#     # Загрузка текста из файла text_end.pickle и добавление его в конец updated_text
-#     try:
-#         filename = f'{destination_channel_id}_text_end.pickle
-#         if os.path.getsize(filename) > 0:
-#             with open(filename, 'rb') as f:
-#                 text_end = pickle.load(f)
-#             updated_text += "\n\n" + text_end  # Добавляем текст из файла в конец обновленного текста
-#     except Exception as e:
-#         logger.warning(f"Ошибка при загрузке текста из файла: {str(e)}")
-#
-#
-#     if moderation_active:
-#         try:
-#             if event.message.media:
-#                 if isinstance(event.message.media, MessageMediaWebPage):
-#                     webpage_url = event.message.media.webpage.url
-#                     updated_text_with_url = f"{updated_text}"
-#                     sent_message = await client.send_message(technical_channel_id, updated_text_with_url)
-#                 else:
-#                     sent_message = await client.send_message(technical_channel_id, updated_text, file=event.message.media)
-#             else:
-#                 sent_message = await client.send_message(technical_channel_id, updated_text)
-#
-#             message_storage[sent_message.id] = sent_message
-#             moderation_keyboard = InlineKeyboardMarkup(row_width=2).add(
-#                 InlineKeyboardButton("Отправить", callback_data=f'send_{sent_message.id}'),
-#                 InlineKeyboardButton("Отклонить", callback_data=f'decline_{sent_message.id}'),
-#                 InlineKeyboardButton("Отредактировано", callback_data=f'edited_{sent_message.id}'),
-#                 InlineKeyboardButton("Рерайт текста", callback_data=f'rewrite_{sent_message.id}'),
-#                 InlineKeyboardButton("Отложить", callback_data=f'postpone_{sent_message.id}'),
-#                 InlineKeyboardButton("Генерация фото", callback_data=f'image_gen_{sent_message.id}')
-#             )
-#
-#             # Отправка клавиатуры в технический канал
-#             destination_channel_title, _ = await get_destination_channel_info(destination_channel_id)
-#             await bot.send_message(technical_channel_id,
-#                                    f"Выберите действие ({destination_channel_title} - ID {destination_channel_id}):",
-#                                    reply_markup=moderation_keyboard)
-#         except Exception as e:
-#             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
-#         return
-#     # Получаем destination_channel_ids для текущего source_channel_id
-#     destination_channel_ids = channel_mapping.get(event.chat_id, [])   #вытаскивает элемент из списка
-#
-#     if destination_channel_ids:  # Проверяем, есть ли получатели для источника
-#         try:
-#             for destination_channel_id in destination_channel_ids:  # Итерация по всем получателям
-#                 if event.message.media:
-#                     if isinstance(event.message.media, MessageMediaWebPage):
-#                         webpage_url = event.message.media.webpage.url
-#                         updated_text_with_url = f"{updated_text}"
-#                         await client.send_message(destination_channel_id, updated_text_with_url)
-#                     else:
-#                         await client.send_file(destination_channel_id, event.message.media, caption=updated_text)
-#                 else:
-#                     await client.send_message(destination_channel_id, updated_text)
-#                 logger.info(f"Сообщение переслано: из канала {event.chat_id} в канал {destination_channel_id}")
-#         except Exception as e:
-#             logger.error(f"Ошибка при отправке сообщения: {str(e)}")
-#     else:
-#         logger.warning(f"Нет получателей для канала {event.chat_id}")
-#
 
 
 def create_autoposter_menu_keyboard():
